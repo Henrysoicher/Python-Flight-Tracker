@@ -50,7 +50,7 @@ PWM_BITS = 11
 PWM_LSB_NS = 50
 GPIO_SLOWDOWN = 6
 BRIGHTNESS = 85
-LIMIT_REFRESH_HZ = 263
+LIMIT_REFRESH_HZ = 271
 
 FONT_SMALL_CANDIDATES = [
     "/home/henry/rpi-rgb-led-matrix/fonts/6x10.bdf",
