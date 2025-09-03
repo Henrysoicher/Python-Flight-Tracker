@@ -46,11 +46,11 @@ _SESS = requests.Session(); _SESS.headers.update(BROWSER_HEADERS)
 MATRIX_ROWS, MATRIX_COLS = 32, 64
 HARDWARE_MAPPING = "adafruit-hat"
 
-PWM_BITS = 10
-PWM_LSB_NS = 70
+PWM_BITS = 11
+PWM_LSB_NS = 100
 GPIO_SLOWDOWN = 6
 BRIGHTNESS = 80
-LIMIT_REFRESH_HZ = 216
+LIMIT_REFRESH_HZ = 500
 
 FONT_SMALL_CANDIDATES = [
     "/home/henry/rpi-rgb-led-matrix/fonts/6x10.bdf",
