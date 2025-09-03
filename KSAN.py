@@ -49,8 +49,8 @@ HARDWARE_MAPPING = "adafruit-hat"
 PWM_BITS = 10
 PWM_LSB_NS = 70
 GPIO_SLOWDOWN = 6
-BRIGHTNESS = 80
-LIMIT_REFRESH_HZ = 259
+BRIGHTNESS = 90
+LIMIT_REFRESH_HZ = 271
 
 FONT_SMALL_CANDIDATES = [
     "/home/henry/rpi-rgb-led-matrix/fonts/6x10.bdf",
