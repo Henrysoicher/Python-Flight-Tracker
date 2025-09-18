@@ -544,11 +544,11 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
 
         draw(0, 0); time.sleep(0.2)
 
-# ===== MLB renderer using a bigger font and team colors (inning now same big font) =====
+# ===== MLB renderer using a bigger font; all team text white =====
 def render_mlb_view(matrix: RGBMatrix,
                     font_small, font_big,
                     top_text: str, bottom_text: str, corner_text: str,
-                    top_color: graphics.Color, bottom_color: graphics.Color,
+                    top_color: graphics.Color, bottom_color: graphics.Color,  # kept for signature compatibility; ignored
                     secs: float, margin: int):
     end_time = time.time() + secs
     c = matrix.CreateFrameCanvas()
@@ -562,16 +562,16 @@ def render_mlb_view(matrix: RGBMatrix,
     while time.time() < end_time:
         c.Clear()
 
-        # Top line in team color
-        graphics.DrawText(c, font_big, margin, MLB_LINE1_Y, top_color or WHITE, top_text or "")
+        # Top line in WHITE (ignore provided colors)
+        graphics.DrawText(c, font_big, margin, MLB_LINE1_Y, WHITE, top_text or "")
 
-        # Corner text in big font at top right (same size as teams)
+        # Corner text in big font at top right (white)
         if corner_text:
             xc = matrix.width - margin - w_corner
             graphics.DrawText(c, font_big, xc, MLB_LINE1_Y, WHITE, corner_text)
 
-        # Bottom line in team color
-        graphics.DrawText(c, font_big, margin, MLB_LINE2_Y, bottom_color or WHITE, bottom_text or "")
+        # Bottom line in WHITE
+        graphics.DrawText(c, font_big, margin, MLB_LINE2_Y, WHITE, bottom_text or "")
 
         matrix.SwapOnVSync(c)
         time.sleep(0.05)  # light refresh to keep screen alive
