@@ -2,7 +2,7 @@
 # KSAN approach corridor viewer using FR24 scrape with simple weather and Padres overlay
 
 import math, time, logging, requests
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict
 from rgbmatrix import RGBMatrix, RGBMatrixOptions, graphics
 from airports_db import AIRPORTS_IATA
 
@@ -55,23 +55,8 @@ FONT_SMALL_CANDIDATES = [
     "/usr/local/share/rgbmatrix/fonts/6x10.bdf",
     "/home/henry/rpi-rgb-led-matrix/fonts/5x8.bdf",
 ]
-
-# larger font for MLB lines
-FONT_MEDIUM_CANDIDATES = [
-    "/home/henry/rpi-rgb-led-matrix/fonts/8x13.bdf",
-    "/usr/local/share/rgbmatrix/fonts/8x13.bdf",
-    "/home/henry/rpi-rgb-led-matrix/fonts/7x13.bdf",
-    "/usr/local/share/rgbmatrix/fonts/7x13.bdf",
-    "/home/henry/rpi-rgb-led-matrix/fonts/9x18.bdf",
-    "/usr/local/share/rgbmatrix/fonts/9x18.bdf",
-]
-
 LINE1_Y, LINE2_Y, LINE3_Y = 10, 20, 30
 SIDE_MARGIN_PX = 2
-
-# baselines for the larger MLB font within 32 rows
-MLB_LINE1_Y = 13
-MLB_LINE2_Y = 28
 
 # dot settings
 DOT_DIAM_PX = 7
@@ -208,7 +193,7 @@ def fetch_weather_simple():
 # ===== Padres live only when tied or winning =====
 def fetch_padres_score_lines():
     """
-    Returns lines only when a Padres game is live and tied or they are winning.
+    Returns lines only when a Padres game is live and tied or winning.
     Output is have_game, top_line, bottom_line, corner_text.
     Padres is always on the top line.
     """
@@ -334,13 +319,13 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
     def draw(off2: int = 0, off3: int = 0):
         c.Clear()
 
-        # line one position
+        # line one
         text1 = l1 or "NO TRAFFIC"
         w1_ = width(text1)
         x1 = (margin if left_align else clamp_center_x(matrix.width, w1_, margin))
         graphics.DrawText(c, font, x1, LINE1_Y, WHITE, text1)
 
-        # optional dot for line one unless suppressed
+        # draw dot unless suppressed
         if (dot1 is not None) and (not left_align):
             right1 = min(matrix.width - margin - 1, x1 + w1_ + DOT_GAP_PX)
             draw_status_dot(c, right1, LINE1_Y, dot1)
@@ -359,7 +344,7 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
                     right2 = min(matrix.width - margin - 1, x2 + w2 + DOT_GAP_PX)
                     draw_status_dot(c, right2, LINE2_Y, dot2)
             else:
-                x2 = margin - off2 if left_align else margin - off2
+                x2 = margin - off2
                 graphics.DrawText(c, font, x2, LINE2_Y, WHITE, l2)
 
         # line three
@@ -368,62 +353,44 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
                 x3 = (margin if left_align else clamp_center_x(matrix.width, w3, margin))
                 graphics.DrawText(c, font, x3, LINE3_Y, WHITE, l3)
             else:
-                x3 = margin - off3 if left_align else margin - off3
+                x3 = margin - off3
                 graphics.DrawText(c, font, x3, LINE3_Y, WHITE, l3)
 
         matrix.SwapOnVSync(c)
 
-    # if both non scrolling just hold
     if l2_fits and l3_fits:
         draw()
         time.sleep(max(0.0, end_time - time.time()))
         return
 
-    # scrolling cycle
     while time.time() < end_time:
-        # hold before scroll
         draw(0, 0)
         time.sleep(min(hold_ms/1000.0, max(0.0, end_time - time.time())))
         if time.time() >= end_time: break
 
-        # scroll line two
         off2 = 0
         while off2 < l2_span and time.time() < end_time:
-            draw(off2, 0)
-            time.sleep(step_ms/1000.0)
-            off2 += step_px
-
-        # hold end of line two
-        draw(l2_span, 0)
-        time.sleep(min(hold_ms/1000.0, max(0.0, end_time - time.time())))
+            draw(off2, 0); time.sleep(step_ms/1000.0); off2 += step_px
+        draw(l2_span, 0); time.sleep(min(hold_ms/1000.0, max(0.0, end_time - time.time())))
         if time.time() >= end_time: break
 
-        # small pause
         draw(0, 0); time.sleep(0.2)
         if time.time() >= end_time: break
 
-        # hold before line three scroll
-        draw(0, 0)
-        time.sleep(min(hold_ms/1000.0, max(0.0, end_time - time.time())))
+        draw(0, 0); time.sleep(min(hold_ms/1000.0, max(0.0, end_time - time.time())))
         if time.time() >= end_time: break
 
-        # scroll line three
         off3 = 0
         while off3 < l3_span and time.time() < end_time:
-            draw(0, off3)
-            time.sleep(step_ms/1000.0)
-            off3 += step_px
-
-        # hold end of line three
-        draw(0, l3_span)
-        time.sleep(min(hold_ms/1000.0, max(0.0, end_time - time.time())))
+            draw(0, off3); time.sleep(step_ms/1000.0); off3 += step_px
+        draw(0, l3_span); time.sleep(min(hold_ms/1000.0, max(0.0, end_time - time.time())))
         if time.time() >= end_time: break
 
         draw(0, 0); time.sleep(0.2)
 
-# ===== MLB renderer with big font and Padres S and D coloring only =====
+# ===== MLB renderer that uses the same font size and colors S and D only =====
 def render_mlb_view(matrix: RGBMatrix,
-                    font_big,
+                    font,
                     top_text: str, bottom_text: str, corner_text: str,
                     secs: float, margin: int):
     end_time = time.time() + secs
@@ -432,34 +399,29 @@ def render_mlb_view(matrix: RGBMatrix,
     def width(f, t: str) -> int:
         return graphics.DrawText(c, f, 0, 0, graphics.Color(0,0,0), t or "")
 
-    w_corner = width(font_big, corner_text or "")
+    w_corner = width(font, corner_text or "")
 
     def draw_colored_padres(x: int, y: int, text: str):
         x_cursor = x
         for ch in text or "":
             ch_up = ch.upper()
-            if ch_up == "S":
-                color = PADRES_BROWN
-            elif ch_up == "D":
-                color = PADRES_YELLOW
-            else:
-                color = WHITE
-            w = graphics.DrawText(c, font_big, x_cursor, y, color, ch)
+            color = PADRES_BROWN if ch_up == "S" else PADRES_YELLOW if ch_up == "D" else WHITE
+            w = graphics.DrawText(c, font, x_cursor, y, color, ch)
             x_cursor += w
 
     while time.time() < end_time:
         c.Clear()
 
-        # Top line Padres with S and D colored
-        draw_colored_padres(margin, MLB_LINE1_Y, top_text or "")
+        # Padres top line with S and D coloring
+        draw_colored_padres(margin, LINE1_Y, top_text or "")
 
-        # Inning text in big font at top right in white
+        # Inning in same font at top right in white
         if corner_text:
             xc = matrix.width - margin - w_corner
-            graphics.DrawText(c, font_big, xc, MLB_LINE1_Y, WHITE, corner_text or "")
+            graphics.DrawText(c, font, xc, LINE1_Y, WHITE, corner_text or "")
 
-        # Bottom line opponent in white
-        graphics.DrawText(c, font_big, margin, MLB_LINE2_Y, WHITE, bottom_text or "")
+        # Opponent bottom line in white
+        graphics.DrawText(c, font, margin, LINE2_Y, WHITE, bottom_text or "")
 
         matrix.SwapOnVSync(c)
         time.sleep(0.05)
@@ -474,17 +436,6 @@ def load_small_font():
         except Exception:
             continue
     raise RuntimeError("No BDF font found")
-
-def load_medium_font():
-    for p in FONT_MEDIUM_CANDIDATES:
-        try:
-            f = graphics.Font(); f.LoadFont(p)
-            log.info("Loaded medium font %s", p)
-            return f
-        except Exception:
-            continue
-    log.warning("No medium font found, falling back to small font")
-    return load_small_font()
 
 def setup_matrix():
     o = RGBMatrixOptions()
@@ -512,8 +463,7 @@ def pick_best(items):
 
 # ===== Main =====
 def main():
-    font_small = load_small_font()
-    font_mlb = load_medium_font()
+    font = load_small_font()
     matrix = setup_matrix()
     n,s,w,e = corridor_bbox((P1_LAT,P1_LON),(P2_LAT,P2_LON),CORRIDOR_HALF_MILES)
     log.info(f"BBox {n:.6f},{s:.6f},{w:.6f},{e:.6f}")
@@ -543,21 +493,21 @@ def main():
                 line2 = ac_name or ""
                 line3 = airport_name_only(extra.get("dep_code"), extra.get("dep_name"), extra.get("dep_city"))
 
-                render_cycle_with_margins(matrix, font_small, ident, line2, line3,
+                render_cycle_with_margins(matrix, font, ident, line2, line3,
                                           POLL_INTERVAL_SEC, SIDE_MARGIN_PX,
                                           status_dot, None)
                 continue
 
             have_game, top_line, bottom_line, corner_text = fetch_padres_score_lines()
             if have_game:
-                # MLB view with big font and Padres S and D coloring only
-                render_mlb_view(matrix, font_mlb,
+                # MLB view same font size for teams and inning
+                render_mlb_view(matrix, font,
                                 top_line or "PADRES", bottom_line or "",
                                 corner_text or "",
                                 POLL_INTERVAL_SEC, SIDE_MARGIN_PX)
             else:
                 tt, tc, wt = fetch_weather_simple()
-                render_cycle_with_margins(matrix, font_small, "NO TRAFFIC", tt, wt,
+                render_cycle_with_margins(matrix, font, "NO TRAFFIC", tt, wt,
                                           POLL_INTERVAL_SEC, SIDE_MARGIN_PX,
                                           None, tc)
 
