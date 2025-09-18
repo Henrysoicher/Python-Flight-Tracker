@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # KSAN approach corridor viewer using FR24 scrape with simple weather and Padres overlay
-# Shows ATC callsign exactly as is for example SKW3376
-# Displays Padres live score stacked and left aligned with Padres always on top
+# MLB view shows stacked left aligned lines with Padres on top
 # Inning status is drawn at top right
 # No status dots are drawn on the MLB screen
 
 import math, time, logging, requests
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 from rgbmatrix import RGBMatrix, RGBMatrixOptions, graphics
 from airports_db import AIRPORTS_IATA
 
@@ -59,8 +58,23 @@ FONT_SMALL_CANDIDATES = [
     "/usr/local/share/rgbmatrix/fonts/6x10.bdf",
     "/home/henry/rpi-rgb-led-matrix/fonts/5x8.bdf",
 ]
+
+# New: a slightly larger font for MLB lines about fifty percent larger than 6x10
+FONT_MEDIUM_CANDIDATES = [
+    "/home/henry/rpi-rgb-led-matrix/fonts/8x13.bdf",
+    "/usr/local/share/rgbmatrix/fonts/8x13.bdf",
+    "/home/henry/rpi-rgb-led-matrix/fonts/7x13.bdf",
+    "/usr/local/share/rgbmatrix/fonts/7x13.bdf",
+    "/home/henry/rpi-rgb-led-matrix/fonts/9x18.bdf",  # fallback if you want even larger
+    "/usr/local/share/rgbmatrix/fonts/9x18.bdf",
+]
+
 LINE1_Y, LINE2_Y, LINE3_Y = 10, 20, 30
 SIDE_MARGIN_PX = 2
+
+# For the larger MLB font we use custom baseline Y values that fit in 32 rows
+MLB_LINE1_Y = 13
+MLB_LINE2_Y = 28
 
 # dot settings for seven pixel text with one pixel upward nudge
 DOT_DIAM_PX = 7
@@ -74,7 +88,12 @@ WEATHER_CACHE_TTL = 900
 _weather_simple_cache = {"ts": 0.0, "temp_text": "", "temp_color": None, "wind_text": ""}
 
 # ===== Padres cache =====
-_padres_cache = {"ts": 0.0, "have": False, "top": "", "bottom": "", "corner": "", "color": None}
+# Now includes per line colors and the inning corner text
+_padres_cache = {
+    "ts": 0.0, "have": False,
+    "top": "", "bottom": "", "corner": "",
+    "top_color": None, "bottom_color": None
+}
 PADRES_CACHE_TTL = 30
 
 # ===== Logging =====
@@ -132,6 +151,16 @@ def airport_name_only(dep_code, dep_name, dep_city):
         return name or code
     if dep_name: return dep_name.split(",")[0].strip()
     return code or ""
+
+def _hex_to_color(s: Optional[str], default: graphics.Color) -> graphics.Color:
+    try:
+        if not s: return default
+        s = s.strip().lstrip("#")
+        if len(s) not in (6, 8): return default
+        r = int(s[0:2], 16); g = int(s[2:4], 16); b = int(s[4:6], 16)
+        return graphics.Color(r, g, b)
+    except Exception:
+        return default
 
 # ===== Parsers =====
 def _pick_airport_fields(d):
@@ -286,12 +315,13 @@ def fetch_weather_simple():
 def fetch_padres_score_lines():
     """
     Returns lines only when a Padres game is live and tied or they are winning.
-    Output is have_game, top_line, bottom_line, corner_text, color
+    Output is have_game, top_line, bottom_line, corner_text, top_color, bottom_color
     Padres is always on the top line.
     """
     now = time.time()
     if now - _padres_cache["ts"] < PADRES_CACHE_TTL:
-        return _padres_cache["have"], _padres_cache["top"], _padres_cache["bottom"], _padres_cache["corner"], _padres_cache["color"]
+        return (_padres_cache["have"], _padres_cache["top"], _padres_cache["bottom"],
+                _padres_cache["corner"], _padres_cache["top_color"], _padres_cache["bottom_color"])
 
     def is_live(status_block):
         if not status_block:
@@ -308,6 +338,11 @@ def fetch_padres_score_lines():
 
     def team_abbr(team_obj):
         return (team_obj.get("abbreviation") or team_obj.get("shortDisplayName") or team_obj.get("displayName") or "").upper()
+
+    def team_color(team_obj):
+        # ESPN provides hex without the hash
+        primary = team_obj.get("color")
+        return _hex_to_color(primary, WHITE)
 
     try:
         dates_to_try = [
@@ -350,16 +385,19 @@ def fetch_padres_score_lines():
                 aA = team_abbr(tA)
                 aB = team_abbr(tB)
 
+                cA = team_color(tA)
+                cB = team_color(tB)
+
                 padres_is_A = team_is_padres(tA)
                 padres_score = sA if padres_is_A else sB
                 opp_score = sB if padres_is_A else sA
                 padres_abbr = aA if padres_is_A else aB
                 opp_abbr = aB if padres_is_A else aA
+                padres_color = cA if padres_is_A else cB
+                opp_color = cB if padres_is_A else cA
 
                 if padres_score < opp_score:
                     continue
-
-                color = GREEN if padres_score > opp_score else YELLOW
 
                 t = (ev_status or comp_status or {}).get("type") or {}
                 detail = (t.get("detail") or "").lower()
@@ -370,16 +408,22 @@ def fetch_padres_score_lines():
                 top_line = f"{padres_abbr} {padres_score}"[:32]
                 bottom_line = f"{opp_abbr} {opp_score}"[:32]
 
-                _padres_cache.update({"ts": now, "have": True, "top": top_line, "bottom": bottom_line, "corner": corner, "color": color})
-                return True, top_line, bottom_line, corner, color
+                _padres_cache.update({
+                    "ts": now, "have": True,
+                    "top": top_line, "bottom": bottom_line, "corner": corner,
+                    "top_color": padres_color, "bottom_color": opp_color
+                })
+                return True, top_line, bottom_line, corner, padres_color, opp_color
 
-        _padres_cache.update({"ts": now, "have": False, "top": "", "bottom": "", "corner": "", "color": WHITE})
-        return False, "", "", "", WHITE
+        _padres_cache.update({"ts": now, "have": False, "top": "", "bottom": "", "corner": "",
+                              "top_color": WHITE, "bottom_color": WHITE})
+        return False, "", "", "", WHITE, WHITE
 
     except Exception as e:
         log.info(f"Padres fetch failed: {e}")
-        _padres_cache.update({"ts": now, "have": False, "top": "", "bottom": "", "corner": "", "color": WHITE})
-        return False, "", "", "", WHITE
+        _padres_cache.update({"ts": now, "have": False, "top": "", "bottom": "", "corner": "",
+                              "top_color": WHITE, "bottom_color": WHITE})
+        return False, "", "", "", WHITE, WHITE
 
 # ===== Scrolling renderer with true margins and dots =====
 def render_cycle_with_margins(matrix: RGBMatrix, font,
@@ -500,6 +544,38 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
 
         draw(0, 0); time.sleep(0.2)
 
+# ===== MLB renderer using a bigger font and team colors =====
+def render_mlb_view(matrix: RGBMatrix,
+                    font_small, font_big,
+                    top_text: str, bottom_text: str, corner_text: str,
+                    top_color: graphics.Color, bottom_color: graphics.Color,
+                    secs: float, margin: int):
+    end_time = time.time() + secs
+    c = matrix.CreateFrameCanvas()
+
+    def width(f, t: str) -> int:
+        return graphics.DrawText(c, f, 0, 0, graphics.Color(0,0,0), t or "")
+
+    # Precompute widths with their fonts
+    w_corner = width(font_small, corner_text or "")
+
+    while time.time() < end_time:
+        c.Clear()
+
+        # Top line in team color
+        graphics.DrawText(c, font_big, margin, MLB_LINE1_Y, top_color or WHITE, top_text or "")
+
+        # Corner text in small font at top right
+        if corner_text:
+            xc = matrix.width - margin - w_corner
+            graphics.DrawText(c, font_small, xc, MLB_LINE1_Y, WHITE, corner_text)
+
+        # Bottom line in team color
+        graphics.DrawText(c, font_big, margin, MLB_LINE2_Y, bottom_color or WHITE, bottom_text or "")
+
+        matrix.SwapOnVSync(c)
+        time.sleep(0.05)  # light refresh to keep screen alive
+
 # ===== Matrix setup and font =====
 def load_small_font():
     for p in FONT_SMALL_CANDIDATES:
@@ -510,6 +586,18 @@ def load_small_font():
         except Exception:
             continue
     raise RuntimeError("No BDF font found")
+
+def load_medium_font():
+    for p in FONT_MEDIUM_CANDIDATES:
+        try:
+            f = graphics.Font(); f.LoadFont(p)
+            log.info("Loaded medium font %s", p)
+            return f
+        except Exception:
+            continue
+    # If none found, reuse small to avoid breaking
+    log.warning("No medium font found, falling back to small font")
+    return load_small_font()
 
 def setup_matrix():
     o = RGBMatrixOptions()
@@ -537,7 +625,8 @@ def pick_best(items):
 
 # ===== Main =====
 def main():
-    font = load_small_font()
+    font_small = load_small_font()
+    font_mlb = load_medium_font()
     matrix = setup_matrix()
     n,s,w,e = corridor_bbox((P1_LAT,P1_LON),(P2_LAT,P2_LON),CORRIDOR_HALF_MILES)
     log.info(f"BBox {n:.6f},{s:.6f},{w:.6f},{e:.6f}")
@@ -567,22 +656,22 @@ def main():
                 line2 = ac_name or ""
                 line3 = airport_name_only(extra.get("dep_code"), extra.get("dep_name"), extra.get("dep_city"))
 
-                render_cycle_with_margins(matrix, font, ident, line2, line3,
+                render_cycle_with_margins(matrix, font_small, ident, line2, line3,
                                           POLL_INTERVAL_SEC, SIDE_MARGIN_PX,
                                           status_dot, None)
                 continue
 
-            show_padres, top_line, bottom_line, corner_text, pcol = fetch_padres_score_lines()
-            if show_padres:
-                # MLB view: stacked left aligned lines, inning in top right, no dots
-                render_cycle_with_margins(matrix, font, top_line or "PADRES", bottom_line, "",
-                                          POLL_INTERVAL_SEC, SIDE_MARGIN_PX,
-                                          None, None,
-                                          left_align=True,
-                                          corner_right_text=corner_text)
+            have_game, top_line, bottom_line, corner_text, top_color, bottom_color = fetch_padres_score_lines()
+            if have_game:
+                # MLB view: bigger font, team colors, stacked left aligned, inning at top right
+                render_mlb_view(matrix, font_small, font_mlb,
+                                top_line or "PADRES", bottom_line or "",
+                                corner_text or "",
+                                top_color or WHITE, bottom_color or WHITE,
+                                POLL_INTERVAL_SEC, SIDE_MARGIN_PX)
             else:
                 tt, tc, wt = fetch_weather_simple()
-                render_cycle_with_margins(matrix, font, "NO TRAFFIC", tt, wt,
+                render_cycle_with_margins(matrix, font_small, "NO TRAFFIC", tt, wt,
                                           POLL_INTERVAL_SEC, SIDE_MARGIN_PX,
                                           None, tc)
 
