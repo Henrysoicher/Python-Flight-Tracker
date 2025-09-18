@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # KSAN approach corridor viewer using FR24 scrape with simple weather and Padres overlay
 # Shows ATC callsign exactly as is for example SKW3376
-# Displays Padres live score if tied or winning, otherwise weather with temp dot and wind arrow
+# Displays Padres live score stacked and left aligned with Padres always on top
+# Inning status is drawn at top right
+# No status dots are drawn on the MLB screen
 
 import math, time, logging, requests
 from typing import Optional, List, Dict
@@ -72,7 +74,7 @@ WEATHER_CACHE_TTL = 900
 _weather_simple_cache = {"ts": 0.0, "temp_text": "", "temp_color": None, "wind_text": ""}
 
 # ===== Padres cache =====
-_padres_cache = {"ts": 0.0, "have": False, "l1": "", "l2": "", "color": None}
+_padres_cache = {"ts": 0.0, "have": False, "top": "", "bottom": "", "corner": "", "color": None}
 PADRES_CACHE_TTL = 30
 
 # ===== Logging =====
@@ -284,11 +286,12 @@ def fetch_weather_simple():
 def fetch_padres_score_lines():
     """
     Returns lines only when a Padres game is live and tied or they are winning.
-    Robust to ESPN date and status variations.
+    Output is have_game, top_line, bottom_line, corner_text, color
+    Padres is always on the top line.
     """
     now = time.time()
     if now - _padres_cache["ts"] < PADRES_CACHE_TTL:
-        return _padres_cache["have"], _padres_cache["l1"], _padres_cache["l2"], _padres_cache["color"]
+        return _padres_cache["have"], _padres_cache["top"], _padres_cache["bottom"], _padres_cache["corner"], _padres_cache["color"]
 
     def is_live(status_block):
         if not status_block:
@@ -350,6 +353,8 @@ def fetch_padres_score_lines():
                 padres_is_A = team_is_padres(tA)
                 padres_score = sA if padres_is_A else sB
                 opp_score = sB if padres_is_A else sA
+                padres_abbr = aA if padres_is_A else aB
+                opp_abbr = aB if padres_is_A else aA
 
                 if padres_score < opp_score:
                     continue
@@ -360,27 +365,30 @@ def fetch_padres_score_lines():
                 detail = (t.get("detail") or "").lower()
                 half = "T" if "top" in detail else ("B" if "bot" in detail or "bottom" in detail else "")
                 num = "".join(ch for ch in detail if ch.isdigit()) or ""
+                corner = f"{half}{num}" or "Live"
 
-                l1 = f"{aA} {sA} {aB} {sB}"[:32]
-                l2 = f"{half}{num}" or "Live"
+                top_line = f"{padres_abbr} {padres_score}"[:32]
+                bottom_line = f"{opp_abbr} {opp_score}"[:32]
 
-                _padres_cache.update({"ts": now, "have": True, "l1": l1, "l2": l2, "color": color})
-                return True, l1, l2, color
+                _padres_cache.update({"ts": now, "have": True, "top": top_line, "bottom": bottom_line, "corner": corner, "color": color})
+                return True, top_line, bottom_line, corner, color
 
-        _padres_cache.update({"ts": now, "have": False, "l1": "", "l2": "", "color": WHITE})
-        return False, "", "", WHITE
+        _padres_cache.update({"ts": now, "have": False, "top": "", "bottom": "", "corner": "", "color": WHITE})
+        return False, "", "", "", WHITE
 
     except Exception as e:
         log.info(f"Padres fetch failed: {e}")
-        _padres_cache.update({"ts": now, "have": False, "l1": "", "l2": "", "color": WHITE})
-        return False, "", "", WHITE
+        _padres_cache.update({"ts": now, "have": False, "top": "", "bottom": "", "corner": "", "color": WHITE})
+        return False, "", "", "", WHITE
 
 # ===== Scrolling renderer with true margins and dots =====
 def render_cycle_with_margins(matrix: RGBMatrix, font,
                               l1: str, l2: str, l3: str,
                               secs: float, margin: int,
                               dot1: Optional[graphics.Color],
-                              dot2: Optional[graphics.Color]):
+                              dot2: Optional[graphics.Color],
+                              left_align: bool = False,
+                              corner_right_text: Optional[str] = None):
     end_time = time.time() + secs
     hold_ms = 1600
     step_ms = 80
@@ -395,6 +403,7 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
     w1 = width(l1 or "")
     w2 = width(l2 or "")
     w3 = width(l3 or "")
+    wc = width(corner_right_text or "")
 
     l2_fits = (w2 <= viewport_w)
     l3_fits = (w3 <= viewport_w)
@@ -404,34 +413,41 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
     def draw(off2: int = 0, off3: int = 0):
         c.Clear()
 
-        # line one centered and clamped
+        # line one position
         text1 = l1 or "NO TRAFFIC"
         w1_ = width(text1)
-        x1 = clamp_center_x(matrix.width, w1_, margin)
+        x1 = (margin if left_align else clamp_center_x(matrix.width, w1_, margin))
         graphics.DrawText(c, font, x1, LINE1_Y, WHITE, text1)
-        if dot1 is not None:
+
+        # optional dot for line one unless suppressed
+        if (dot1 is not None) and (not left_align):
             right1 = min(matrix.width - margin - 1, x1 + w1_ + DOT_GAP_PX)
             draw_status_dot(c, right1, LINE1_Y, dot1)
 
-        # line two with optional scroll
+        # corner text at top right
+        if corner_right_text:
+            xc = matrix.width - margin - wc
+            graphics.DrawText(c, font, xc, LINE1_Y, WHITE, corner_right_text)
+
+        # line two
         if l2:
             if l2_fits:
-                x2 = clamp_center_x(matrix.width, w2, margin)
+                x2 = (margin if left_align else clamp_center_x(matrix.width, w2, margin))
                 graphics.DrawText(c, font, x2, LINE2_Y, WHITE, l2)
-                if dot2 is not None:
+                if (dot2 is not None) and (not left_align):
                     right2 = min(matrix.width - margin - 1, x2 + w2 + DOT_GAP_PX)
                     draw_status_dot(c, right2, LINE2_Y, dot2)
             else:
-                x2 = margin - off2
+                x2 = margin - off2 if left_align else margin - off2
                 graphics.DrawText(c, font, x2, LINE2_Y, WHITE, l2)
 
-        # line three with optional scroll
+        # line three
         if l3:
             if l3_fits:
-                x3 = clamp_center_x(matrix.width, w3, margin)
+                x3 = (margin if left_align else clamp_center_x(matrix.width, w3, margin))
                 graphics.DrawText(c, font, x3, LINE3_Y, WHITE, l3)
             else:
-                x3 = margin - off3
+                x3 = margin - off3 if left_align else margin - off3
                 graphics.DrawText(c, font, x3, LINE3_Y, WHITE, l3)
 
         matrix.SwapOnVSync(c)
@@ -556,11 +572,14 @@ def main():
                                           status_dot, None)
                 continue
 
-            show_padres, p1, p2, pcol = fetch_padres_score_lines()
+            show_padres, top_line, bottom_line, corner_text, pcol = fetch_padres_score_lines()
             if show_padres:
-                render_cycle_with_margins(matrix, font, p1 or "PADRES", p2, "",
+                # MLB view: stacked left aligned lines, inning in top right, no dots
+                render_cycle_with_margins(matrix, font, top_line or "PADRES", bottom_line, "",
                                           POLL_INTERVAL_SEC, SIDE_MARGIN_PX,
-                                          pcol, None)
+                                          None, None,
+                                          left_align=True,
+                                          corner_right_text=corner_text)
             else:
                 tt, tc, wt = fetch_weather_simple()
                 render_cycle_with_margins(matrix, font, "NO TRAFFIC", tt, wt,
