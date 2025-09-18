@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # KSAN approach corridor viewer using FR24 scrape with simple weather and Padres overlay
-# MLB view shows stacked left aligned team names with centered scores and inning at top right
-# Padres 'S' is brown and 'D' is yellow on the top (Padres) team name only
+# MLB view: team names left, scores centered (with slight right offset), inning at top right
+# Padres 'S' accented (burnt orange) and 'D' accented (yellow) on the top team line only
 # No status dots are drawn on the MLB screen
 
 import math, time, logging, requests
@@ -116,9 +116,13 @@ AC_FULLNAME_MAP = {
 def _col(r,g,b): return graphics.Color(r,g,b)
 WHITE=_col(255,255,255); GREEN=_col(0,255,0); YELLOW=_col(255,255,0); RED=_col(255,0,0); CYAN=_col(0,255,255); BLUE=_col(0,128,255)
 
-# Padres brand colors for S/D accents on the top (Padres) team name
-PADRES_BROWN = graphics.Color(47, 36, 29)      # S
-PADRES_YELLOW = graphics.Color(254, 195, 37)   # D
+# Padres accent colors for the top (Padres) team name
+# Use a brighter "burnt orange" for better visibility on LEDs
+PADRES_BROWN = graphics.Color(210, 110, 20)    # S (burnt orange-ish for readability)
+PADRES_YELLOW = graphics.Color(254, 195, 37)   # D (unchanged, looks good)
+
+# Score center offset (pixels) to push scores slightly to the right
+SCORE_CENTER_OFFSET_PX = 6
 
 # ===== Geo helpers =====
 def miles_to_deg_lat(miles): return miles / 69.0
@@ -534,7 +538,7 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
 
         draw(0, 0); time.sleep(0.2)
 
-# ===== MLB renderer: team names left, scores centered, inning right; Padres S/D accented =====
+# ===== MLB renderer: team names left, scores centered w/ offset, inning right; Padres S/D accented =====
 def render_mlb_view(matrix: RGBMatrix,
                     font_small, font_big,
                     top_text: str, bottom_text: str, corner_text: str,
@@ -552,13 +556,11 @@ def render_mlb_view(matrix: RGBMatrix,
         parts = s.rsplit(" ", 1)
         if len(parts) == 2 and parts[1].strip().isdigit():
             return parts[0].strip(), parts[1].strip()
-        # If score not numeric (edge case), try best-effort split
         return (parts[0].strip(), parts[1].strip()) if len(parts) == 2 else (s.strip(), "")
 
     def draw_team_left(text: str, y: int, padres_accent: bool):
         x = margin
         if padres_accent:
-            # Color S and D for Padres line only
             cur_x = x
             for ch in (text or ""):
                 up = ch.upper()
@@ -570,7 +572,7 @@ def render_mlb_view(matrix: RGBMatrix,
 
     def draw_score_center(text: str, y: int):
         w = width(font_big, text or "")
-        x = clamp_center_x(matrix.width, w, margin)
+        x = clamp_center_x(matrix.width, w, margin) + SCORE_CENTER_OFFSET_PX
         graphics.DrawText(c, font_big, x, y, WHITE, text or "")
 
     while time.time() < end_time:
@@ -580,7 +582,7 @@ def render_mlb_view(matrix: RGBMatrix,
         t_team, t_score = split_team_score(top_text or "")
         b_team, b_score = split_team_score(bottom_text or "")
 
-        # Top: team left with Padres accents; score centered
+        # Top: team left (Padres accents), score centered w/ slight right shift
         draw_team_left(t_team, MLB_LINE1_Y, padres_accent=True)
         draw_score_center(t_score, MLB_LINE1_Y)
 
@@ -590,7 +592,7 @@ def render_mlb_view(matrix: RGBMatrix,
             xc = matrix.width - margin - w_corner
             graphics.DrawText(c, font_big, xc, MLB_LINE1_Y, WHITE, corner_text)
 
-        # Bottom: opponent team left (white); score centered
+        # Bottom: opponent team left (white), score centered w/ slight right shift
         draw_team_left(b_team, MLB_LINE2_Y, padres_accent=False)
         draw_score_center(b_score, MLB_LINE2_Y)
 
@@ -633,8 +635,6 @@ def setup_matrix():
     return RGBMatrix(options=o)
 
 # ===== Picking =====
-def miles_to_deg_lat(miles): return miles / 69.0
-def miles_to_deg_lon(miles, lat): return miles / (69.0 * max(0.1, math.cos(math.radians(lat))))
 def pick_best(items):
     best, best_d = None, 1e12
     for it in items:
