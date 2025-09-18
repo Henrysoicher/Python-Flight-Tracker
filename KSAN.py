@@ -544,7 +544,7 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
 
         draw(0, 0); time.sleep(0.2)
 
-# ===== MLB renderer using a bigger font and team colors =====
+# ===== MLB renderer using a bigger font and team colors (inning now same big font) =====
 def render_mlb_view(matrix: RGBMatrix,
                     font_small, font_big,
                     top_text: str, bottom_text: str, corner_text: str,
@@ -556,8 +556,8 @@ def render_mlb_view(matrix: RGBMatrix,
     def width(f, t: str) -> int:
         return graphics.DrawText(c, f, 0, 0, graphics.Color(0,0,0), t or "")
 
-    # Precompute widths with their fonts
-    w_corner = width(font_small, corner_text or "")
+    # Corner uses the SAME big font as the team lines
+    w_corner = width(font_big, corner_text or "")
 
     while time.time() < end_time:
         c.Clear()
@@ -565,10 +565,10 @@ def render_mlb_view(matrix: RGBMatrix,
         # Top line in team color
         graphics.DrawText(c, font_big, margin, MLB_LINE1_Y, top_color or WHITE, top_text or "")
 
-        # Corner text in small font at top right
+        # Corner text in big font at top right (same size as teams)
         if corner_text:
             xc = matrix.width - margin - w_corner
-            graphics.DrawText(c, font_small, xc, MLB_LINE1_Y, WHITE, corner_text)
+            graphics.DrawText(c, font_big, xc, MLB_LINE1_Y, WHITE, corner_text)
 
         # Bottom line in team color
         graphics.DrawText(c, font_big, margin, MLB_LINE2_Y, bottom_color or WHITE, bottom_text or "")
@@ -663,7 +663,7 @@ def main():
 
             have_game, top_line, bottom_line, corner_text, top_color, bottom_color = fetch_padres_score_lines()
             if have_game:
-                # MLB view: bigger font, team colors, stacked left aligned, inning at top right
+                # MLB view: bigger font everywhere (teams + inning), stacked left aligned, inning at top right
                 render_mlb_view(matrix, font_small, font_mlb,
                                 top_line or "PADRES", bottom_line or "",
                                 corner_text or "",
