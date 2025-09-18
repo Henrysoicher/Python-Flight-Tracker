@@ -118,11 +118,11 @@ WHITE=_col(255,255,255); GREEN=_col(0,255,0); YELLOW=_col(255,255,0); RED=_col(2
 
 # Padres accent colors for the top (Padres) team name
 # Use a brighter "burnt orange" for better visibility on LEDs
-PADRES_BROWN = graphics.Color(210, 110, 20)    # S (burnt orange-ish for readability)
+PADRES_BROWN = graphics.Color(179, 92, 14)    # S (burnt orange-ish for readability)
 PADRES_YELLOW = graphics.Color(254, 195, 37)   # D (unchanged, looks good)
 
 # Score center offset (pixels) to push scores slightly to the right
-SCORE_CENTER_OFFSET_PX = 6
+SCORE_CENTER_OFFSET_PX = 4
 
 # ===== Geo helpers =====
 def miles_to_deg_lat(miles): return miles / 69.0
