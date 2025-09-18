@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # KSAN approach corridor viewer using FR24 scrape with simple weather and Padres overlay
 # MLB view shows stacked left aligned lines with Padres on top
-# Inning status is drawn at top right
-# No status dots are drawn on the MLB screen
+# Inning status is drawn at top right (same larger font as teams)
+# MLB screen: all text white EXCEPT Padres top line where only 'S' is Padres brown and 'D' is Padres yellow
 
 import math, time, logging, requests
 from typing import Optional, List, Dict, Tuple
@@ -59,20 +59,20 @@ FONT_SMALL_CANDIDATES = [
     "/home/henry/rpi-rgb-led-matrix/fonts/5x8.bdf",
 ]
 
-# New: a slightly larger font for MLB lines about fifty percent larger than 6x10
+# Larger font for MLB lines (about 50% bigger than 6x10)
 FONT_MEDIUM_CANDIDATES = [
     "/home/henry/rpi-rgb-led-matrix/fonts/8x13.bdf",
     "/usr/local/share/rgbmatrix/fonts/8x13.bdf",
     "/home/henry/rpi-rgb-led-matrix/fonts/7x13.bdf",
     "/usr/local/share/rgbmatrix/fonts/7x13.bdf",
-    "/home/henry/rpi-rgb-led-matrix/fonts/9x18.bdf",  # fallback if you want even larger
+    "/home/henry/rpi-rgb-led-matrix/fonts/9x18.bdf",  # fallback larger
     "/usr/local/share/rgbmatrix/fonts/9x18.bdf",
 ]
 
 LINE1_Y, LINE2_Y, LINE3_Y = 10, 20, 30
 SIDE_MARGIN_PX = 2
 
-# For the larger MLB font we use custom baseline Y values that fit in 32 rows
+# Baselines for MLB larger font (fit within 32 rows)
 MLB_LINE1_Y = 13
 MLB_LINE2_Y = 28
 
@@ -88,7 +88,7 @@ WEATHER_CACHE_TTL = 900
 _weather_simple_cache = {"ts": 0.0, "temp_text": "", "temp_color": None, "wind_text": ""}
 
 # ===== Padres cache =====
-# Now includes per line colors and the inning corner text
+# Includes per-line colors and inning text (colors now ignored for rendering; kept for compatibility)
 _padres_cache = {
     "ts": 0.0, "have": False,
     "top": "", "bottom": "", "corner": "",
@@ -162,103 +162,13 @@ def _hex_to_color(s: Optional[str], default: graphics.Color) -> graphics.Color:
     except Exception:
         return default
 
-# ===== Parsers =====
-def _pick_airport_fields(d):
-    if not isinstance(d, dict): return (None,None,None)
-    code = d.get("iata") or d.get("code") or d.get("icao")
-    name = d.get("name")
-    city = (d.get("position") or {}).get("region",{}).get("city")
-    return (str(code).upper() if code else None, name, city)
-
-# ===== FR24 fetchers =====
-def _feed_url(host, north, south, west, east):
-    return f"{host}{FEED_PATH}?bounds={north:.6f},{south:.6f},{west:.6f},{east:.6f}{FEED_TAIL}&_ts={int(time.time())}"
-
-def fetch_live_scrape(north, south, west, east) -> List[dict]:
-    last_err = None
-    for host in FEED_HOSTS:
-        url = _feed_url(host, north, south, west, east)
-        try:
-            r = _SESS.get(url, timeout=HTTP_TIMEOUT_SEC)
-            if r.status_code == 403:
-                last_err = f"{host} -> 403"; continue
-            r.raise_for_status()
-            js = r.json()
-            out = []
-            for fid, info in js.items():
-                if fid in ("full_count", "version"): continue
-                try:
-                    lat = float(info[1]); lon = float(info[2])
-                    alt_ft = float(info[4]) if info[4] not in (None, "", "0", 0) else None
-                    callsign = str(info[13] or "").strip()
-                    out.append({"lat": lat, "lon": lon, "alt_ft": alt_ft, "fn": callsign, "fid": fid})
-                except Exception:
-                    continue
-            if DEBUG: log.info(f"Scrape live {host.split('//')[1]} flights {len(out)}")
-            return out
-        except Exception as e:
-            last_err = f"{host} -> {e}"; continue
-    if last_err: log.warning(f"Feed scrape error {last_err}")
-    return []
-
-def fetch_details_scrape(fid: str) -> dict:
-    url = f"{DETAILS_HEAD}{fid}&_ts={int(time.time())}"
-    try:
-        r = _SESS.get(url, timeout=HTTP_TIMEOUT_SEC)
-        if r.status_code == 403:
-            tmp = dict(BROWSER_HEADERS); tmp.pop("Origin", None); tmp.pop("Referer", None)
-            with requests.Session() as s2:
-                s2.headers.update(tmp); r = s2.get(url, timeout=HTTP_TIMEOUT_SEC)
-        r.raise_for_status()
-        js = r.json()
-        ident = js.get("identification", {}) or {}
-        callsign = ident.get("callsign")
-        flight_number_default = ((ident.get("number") or {}).get("default") if isinstance(ident.get("number"), dict) else None)
-        ac = (js.get("aircraft") or {}).get("model", {}) or {}
-        ac_code, ac_text = ac.get("code"), ac.get("text")
-        reg = (js.get("aircraft") or {}).get("registration")
-        dep = (js.get("airport") or {}).get("origin", {}) or {}
-        dep_code, dep_name, dep_city = _pick_airport_fields(dep)
-        return {
-            "callsign": (str(callsign).strip() if callsign else None),
-            "flight_number": (str(flight_number_default).strip() if flight_number_default else None),
-            "registration": (str(reg).strip().upper() if reg else None),
-            "type": (str(ac_code).strip().upper() if ac_code else None),
-            "type_text": ac_text,
-            "dep_code": dep_code, "dep_name": dep_name, "dep_city": dep_city,
-        }
-    except Exception as e:
-        log.warning(f"Detail scrape error {fid}: {e}")
-        return {}
-
-def fetch_delay_minutes(fid: str) -> Optional[int]:
-    url = f"{DETAILS_HEAD}{fid}&_ts={int(time.time())}"
-    try:
-        r = _SESS.get(url, timeout=HTTP_TIMEOUT_SEC)
-        if r.status_code == 403:
-            tmp = dict(BROWSER_HEADERS); tmp.pop("Origin", None); tmp.pop("Referer", None)
-            with requests.Session() as s2:
-                s2.headers.update(tmp); r = s2.get(url, timeout=HTTP_TIMEOUT_SEC)
-        r.raise_for_status()
-        js = r.json()
-        tblock = js.get("time") or {}
-        sched = (tblock.get("scheduled") or {})
-        esti  = (tblock.get("estimated") or {})
-        real  = (tblock.get("real") or {})
-        a_sched = sched.get("arrival"); a_best = real.get("arrival") or esti.get("arrival")
-        if a_sched and a_best:
-            return int(round((int(a_best) - int(a_sched)) / 60.0))
-        d_sched = sched.get("departure"); d_best = real.get("departure") or esti.get("departure")
-        if d_sched and d_best:
-            return int(round((int(d_best) - int(d_sched)) / 60.0))
-        return None
-    except Exception as e:
-        log.info(f"Delay check failed {fid}: {e}")
-        return None
-
 # ===== Colors and dots =====
 def _col(r,g,b): return graphics.Color(r,g,b)
 WHITE=_col(255,255,255); GREEN=_col(0,255,0); YELLOW=_col(255,255,0); RED=_col(255,0,0); CYAN=_col(0,255,255); BLUE=_col(0,128,255)
+
+# Padres brand colors for S/D accents
+PADRES_BROWN = graphics.Color(47, 36, 29)      # S
+PADRES_YELLOW = graphics.Color(254, 195, 37)   # D
 
 def map_delay_to_color(d):
     if d is None: return GREEN
@@ -315,7 +225,7 @@ def fetch_weather_simple():
 def fetch_padres_score_lines():
     """
     Returns lines only when a Padres game is live and tied or they are winning.
-    Output is have_game, top_line, bottom_line, corner_text, top_color, bottom_color
+    Output is have_game, top_line, bottom_line, corner_text, top_color, bottom_color (colors kept but not used).
     Padres is always on the top line.
     """
     now = time.time()
@@ -544,11 +454,11 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
 
         draw(0, 0); time.sleep(0.2)
 
-# ===== MLB renderer using a bigger font and team colors (inning now same big font) =====
+# ===== MLB renderer using the big font everywhere; Padres S/D colored only =====
 def render_mlb_view(matrix: RGBMatrix,
                     font_small, font_big,
                     top_text: str, bottom_text: str, corner_text: str,
-                    top_color: graphics.Color, bottom_color: graphics.Color,
+                    top_color: graphics.Color, bottom_color: graphics.Color,  # kept for signature compatibility; not used
                     secs: float, margin: int):
     end_time = time.time() + secs
     c = matrix.CreateFrameCanvas()
@@ -559,19 +469,28 @@ def render_mlb_view(matrix: RGBMatrix,
     # Corner uses the SAME big font as the team lines
     w_corner = width(font_big, corner_text or "")
 
+    def draw_padres_top_line(x: int, y: int, text: str):
+        """Draw top line with only 'S' in Padres brown and 'D' in Padres yellow; all else white."""
+        cur_x = x
+        for ch in text or "":
+            up = ch.upper()
+            color = PADRES_BROWN if up == "S" else PADRES_YELLOW if up == "D" else WHITE
+            w = graphics.DrawText(c, font_big, cur_x, y, color, ch)
+            cur_x += w
+
     while time.time() < end_time:
         c.Clear()
 
-        # Top line in team color
-        graphics.DrawText(c, font_big, margin, MLB_LINE1_Y, top_color or WHITE, top_text or "")
+        # Top line (Padres) with selective S/D coloring
+        draw_padres_top_line(margin, MLB_LINE1_Y, top_text or "")
 
-        # Corner text in big font at top right (same size as teams)
+        # Corner inning text in big font, white
         if corner_text:
             xc = matrix.width - margin - w_corner
             graphics.DrawText(c, font_big, xc, MLB_LINE1_Y, WHITE, corner_text)
 
-        # Bottom line in team color
-        graphics.DrawText(c, font_big, margin, MLB_LINE2_Y, bottom_color or WHITE, bottom_text or "")
+        # Bottom (opponent) line in white
+        graphics.DrawText(c, font_big, margin, MLB_LINE2_Y, WHITE, bottom_text or "")
 
         matrix.SwapOnVSync(c)
         time.sleep(0.05)  # light refresh to keep screen alive
@@ -663,11 +582,11 @@ def main():
 
             have_game, top_line, bottom_line, corner_text, top_color, bottom_color = fetch_padres_score_lines()
             if have_game:
-                # MLB view: bigger font everywhere (teams + inning), stacked left aligned, inning at top right
+                # MLB view: big font everywhere (teams + inning), Padres S/D colored only, opponent white
                 render_mlb_view(matrix, font_small, font_mlb,
                                 top_line or "PADRES", bottom_line or "",
                                 corner_text or "",
-                                top_color or WHITE, bottom_color or WHITE,
+                                top_color or WHITE, bottom_color or WHITE,  # colors not used
                                 POLL_INTERVAL_SEC, SIDE_MARGIN_PX)
             else:
                 tt, tc, wt = fetch_weather_simple()
