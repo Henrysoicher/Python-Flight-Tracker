@@ -3,6 +3,7 @@
 # MLB view: team names left, scores centered (with slight right offset), inning at top right
 # Padres 'S' accented (burnt orange) and 'D' accented (yellow) on the top team line only
 # No status dots are drawn on the MLB screen
+# Updated for new FR24 feed format (19-field array, callsign at [16], type at [8], origin at [11])
 
 import math, time, logging, requests
 from typing import Optional, List, Dict, Tuple
@@ -23,8 +24,8 @@ HTTP_TIMEOUT_SEC  = 8
 
 # ===== FR24 scraping =====
 FEED_HOSTS = [
-    "https://data-live.flightradar24.com",
     "https://data-cloud.flightradar24.com",
+    "https://data-live.flightradar24.com",
 ]
 FEED_PATH = "/zones/fcgi/feed.js"
 FEED_TAIL = (
@@ -88,7 +89,6 @@ WEATHER_CACHE_TTL = 900
 _weather_simple_cache = {"ts": 0.0, "temp_text": "", "temp_color": None, "wind_text": ""}
 
 # ===== Padres cache =====
-# (structure unchanged; colors returned are ignored by the MLB renderer now)
 _padres_cache = {
     "ts": 0.0, "have": False,
     "top": "", "bottom": "", "corner": "",
@@ -100,7 +100,6 @@ PADRES_CACHE_TTL = 30
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("KSAN")
 DEBUG = True
-logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 # ===== Aircraft names =====
 AC_FULLNAME_MAP = {
@@ -118,7 +117,6 @@ def _col(r,g,b): return graphics.Color(r,g,b)
 WHITE=_col(255,255,255); GREEN=_col(0,255,0); YELLOW=_col(255,255,0); RED=_col(255,0,0); CYAN=_col(0,255,255); BLUE=_col(0,128,255)
 
 # Padres accent colors for the top (Padres) team name
-# Use a brighter "burnt orange" for better visibility on LEDs
 PADRES_BROWN = graphics.Color(179, 92, 14)    # S (burnt orange-ish for readability)
 PADRES_YELLOW = graphics.Color(254, 195, 37)   # D (unchanged, looks good)
 
@@ -188,6 +186,28 @@ def _feed_url(host, north, south, west, east):
     return f"{host}{FEED_PATH}?bounds={north:.6f},{south:.6f},{west:.6f},{east:.6f}{FEED_TAIL}&_ts={int(time.time())}"
 
 def fetch_live_scrape(north, south, west, east) -> List[dict]:
+    """
+    FR24 feed array format (19 fields as of 2026):
+      [0]  hex/mode-S id
+      [1]  latitude
+      [2]  longitude
+      [3]  heading
+      [4]  altitude (ft)
+      [5]  ground speed
+      [6]  squawk
+      [7]  unknown
+      [8]  aircraft type (e.g. 'B38M')
+      [9]  registration
+      [10] timestamp
+      [11] origin airport IATA (e.g. 'PHX')
+      [12] destination airport IATA
+      [13] flight number (e.g. 'WN1331')
+      [14] on_ground
+      [15] vertical speed
+      [16] callsign (e.g. 'SWA1331')
+      [17] unknown
+      [18] airline ICAO
+    """
     last_err = None
     for host in FEED_HOSTS:
         url = _feed_url(host, north, south, west, east)
@@ -201,10 +221,20 @@ def fetch_live_scrape(north, south, west, east) -> List[dict]:
             for fid, info in js.items():
                 if fid in ("full_count", "version"): continue
                 try:
-                    lat = float(info[1]); lon = float(info[2])
-                    alt_ft = float(info[4]) if info[4] not in (None, "", "0", 0) else None
-                    callsign = str(info[13] or "").strip()
-                    out.append({"lat": lat, "lon": lon, "alt_ft": alt_ft, "fn": callsign, "fid": fid})
+                    lat     = float(info[1])
+                    lon     = float(info[2])
+                    alt_ft  = float(info[4]) if info[4] not in (None, "", "0", 0) else None
+                    # Callsign at [16], fall back to flight number at [13]
+                    callsign = str(info[16] or info[13] or "").strip()
+                    # Aircraft type now at [8] in the feed directly
+                    ac_type  = str(info[8] or "").strip().upper()
+                    # Origin airport IATA now at [11] in the feed directly
+                    origin   = str(info[11] or "").strip().upper()
+                    out.append({
+                        "lat": lat, "lon": lon, "alt_ft": alt_ft,
+                        "fn": callsign, "fid": fid,
+                        "type": ac_type, "dep_code": origin,
+                    })
                 except Exception:
                     continue
             if DEBUG: log.info(f"Scrape live {host.split('//')[1]} flights {len(out)}")
@@ -216,149 +246,57 @@ def fetch_live_scrape(north, south, west, east) -> List[dict]:
 
 def fetch_details_scrape(fid: str) -> dict:
     url = f"{DETAILS_HEAD}{fid}&_ts={int(time.time())}"
-
     try:
         r = _SESS.get(url, timeout=HTTP_TIMEOUT_SEC)
-
         if r.status_code == 403:
-            tmp = dict(BROWSER_HEADERS)
-            tmp.pop("Origin", None)
-            tmp.pop("Referer", None)
-
+            tmp = dict(BROWSER_HEADERS); tmp.pop("Origin", None); tmp.pop("Referer", None)
             with requests.Session() as s2:
-                s2.headers.update(tmp)
-                r = s2.get(url, timeout=HTTP_TIMEOUT_SEC)
-
+                s2.headers.update(tmp); r = s2.get(url, timeout=HTTP_TIMEOUT_SEC)
         r.raise_for_status()
-
-        try:
-            js = r.json()
-        except Exception:
-            log.warning(f"FR24 returned non-JSON for {fid}")
-            try:
-                log.warning(r.text[:1000])
-            except Exception:
-                pass
-            return {}
-
-        if DEBUG:
-            try:
-                log.info(f"FR24 details keys for {fid}: {list(js.keys())}")
-            except Exception:
-                pass
-
+        js = r.json()
         ident = js.get("identification", {}) or {}
-
-        callsign = (
-            ident.get("callsign")
-            or ident.get("id")
-            or ident.get("hex")
-        )
-
-        number_block = ident.get("number") or {}
-
-        flight_number_default = (
-            number_block.get("default")
-            or number_block.get("short")
-            or ident.get("flight")
-            or ident.get("callsign")
-        )
-
-        aircraft = js.get("aircraft", {}) or {}
-        model = aircraft.get("model", {}) or {}
-
-        ac_code = (
-            model.get("code")
-            or aircraft.get("icao")
-            or aircraft.get("type")
-        )
-
-        ac_text = (
-            model.get("text")
-            or aircraft.get("name")
-            or aircraft.get("type")
-        )
-
-        reg = aircraft.get("registration")
-
-        airport = js.get("airport", {}) or {}
-
-        dep = (
-            airport.get("origin")
-            or airport.get("departure")
-            or airport.get("from")
-            or {}
-        )
-
+        callsign = ident.get("callsign")
+        flight_number_default = ((ident.get("number") or {}).get("default") if isinstance(ident.get("number"), dict) else None)
+        ac = (js.get("aircraft") or {}).get("model", {}) or {}
+        ac_code, ac_text = ac.get("code"), ac.get("text")
+        reg = (js.get("aircraft") or {}).get("registration")
+        dep = (js.get("airport") or {}).get("origin", {}) or {}
         dep_code, dep_name, dep_city = _pick_airport_fields(dep)
-
         return {
             "callsign": (str(callsign).strip() if callsign else None),
             "flight_number": (str(flight_number_default).strip() if flight_number_default else None),
             "registration": (str(reg).strip().upper() if reg else None),
             "type": (str(ac_code).strip().upper() if ac_code else None),
             "type_text": ac_text,
-            "dep_code": dep_code,
-            "dep_name": dep_name,
-            "dep_city": dep_city,
+            "dep_code": dep_code, "dep_name": dep_name, "dep_city": dep_city,
         }
-
     except Exception as e:
         log.warning(f"Detail scrape error {fid}: {e}")
-
-        try:
-            log.warning(r.text[:1000])
-        except Exception:
-            pass
-
         return {}
 
 def fetch_delay_minutes(fid: str) -> Optional[int]:
     url = f"{DETAILS_HEAD}{fid}&_ts={int(time.time())}"
-
     try:
         r = _SESS.get(url, timeout=HTTP_TIMEOUT_SEC)
-
         if r.status_code == 403:
-            tmp = dict(BROWSER_HEADERS)
-            tmp.pop("Origin", None)
-            tmp.pop("Referer", None)
-
+            tmp = dict(BROWSER_HEADERS); tmp.pop("Origin", None); tmp.pop("Referer", None)
             with requests.Session() as s2:
-                s2.headers.update(tmp)
-                r = s2.get(url, timeout=HTTP_TIMEOUT_SEC)
-
+                s2.headers.update(tmp); r = s2.get(url, timeout=HTTP_TIMEOUT_SEC)
         r.raise_for_status()
         js = r.json()
-
-        time_block = js.get("time") or {}
-
-        sched = time_block.get("scheduled") or {}
-        esti = time_block.get("estimated") or {}
-        real = time_block.get("real") or {}
-
-        arrival_sched = sched.get("arrival")
-        arrival_best = real.get("arrival") or esti.get("arrival")
-
-        if arrival_sched and arrival_best:
-            return int(round((int(arrival_best) - int(arrival_sched)) / 60.0))
-
-        dep_sched = sched.get("departure")
-        dep_best = real.get("departure") or esti.get("departure")
-
-        if dep_sched and dep_best:
-            return int(round((int(dep_best) - int(dep_sched)) / 60.0))
-
+        tblock = js.get("time") or {}
+        sched = (tblock.get("scheduled") or {})
+        esti  = (tblock.get("estimated") or {})
+        real  = (tblock.get("real") or {})
+        a_sched = sched.get("arrival"); a_best = real.get("arrival") or esti.get("arrival")
+        if a_sched and a_best:
+            return int(round((int(a_best) - int(a_sched)) / 60.0))
+        d_sched = sched.get("departure"); d_best = real.get("departure") or esti.get("departure")
+        if d_sched and d_best:
+            return int(round((int(d_best) - int(d_sched)) / 60.0))
         return None
-
     except Exception as e:
         log.info(f"Delay check failed {fid}: {e}")
-
-        try:
-            log.info(r.text[:500])
-        except Exception:
-            pass
-
         return None
 
 # ===== Colors & dots helpers (used outside MLB) =====
@@ -631,11 +569,11 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
 
         draw(0, 0); time.sleep(0.2)
 
-# ===== MLB renderer: team names left, scores centered w/ offset, inning right; Padres S/D accented =====
+# ===== MLB renderer =====
 def render_mlb_view(matrix: RGBMatrix,
                     font_small, font_big,
                     top_text: str, bottom_text: str, corner_text: str,
-                    top_color: graphics.Color, bottom_color: graphics.Color,  # kept for signature compatibility; unused
+                    top_color: graphics.Color, bottom_color: graphics.Color,
                     secs: float, margin: int):
     end_time = time.time() + secs
     c = matrix.CreateFrameCanvas()
@@ -644,7 +582,6 @@ def render_mlb_view(matrix: RGBMatrix,
         return graphics.DrawText(c, f, 0, 0, graphics.Color(0,0,0), t or "")
 
     def split_team_score(s: str) -> Tuple[str, str]:
-        # Expect "SD 3" etc. If missing score, put score as "".
         if not s: return "", ""
         parts = s.rsplit(" ", 1)
         if len(parts) == 2 and parts[1].strip().isdigit():
@@ -671,21 +608,17 @@ def render_mlb_view(matrix: RGBMatrix,
     while time.time() < end_time:
         c.Clear()
 
-        # Parse lines into team + score strings
         t_team, t_score = split_team_score(top_text or "")
         b_team, b_score = split_team_score(bottom_text or "")
 
-        # Top: team left (Padres accents), score centered w/ slight right shift
         draw_team_left(t_team, MLB_LINE1_Y, padres_accent=True)
         draw_score_center(t_score, MLB_LINE1_Y)
 
-        # Inning text (top-right), big font, white
         if corner_text:
             w_corner = width(font_big, corner_text or "")
             xc = matrix.width - margin - w_corner
             graphics.DrawText(c, font_big, xc, MLB_LINE1_Y, WHITE, corner_text)
 
-        # Bottom: opponent team left (white), score centered w/ slight right shift
         draw_team_left(b_team, MLB_LINE2_Y, padres_accent=False)
         draw_score_center(b_score, MLB_LINE2_Y)
 
@@ -754,24 +687,10 @@ def main():
             best = pick_best(items)
 
             if best:
-                cache_key = best["fid"]
-                extra = ENRICH_CACHE.get(cache_key)
-
-                needs_refresh = (
-                    not extra
-                    or not extra.get("flight_number")
-                    or not extra.get("dep_code")
-                    or not extra.get("type")
-                )
-
-                if needs_refresh:
-                    fetched = fetch_details_scrape(cache_key)
-
-                    if fetched:
-                        ENRICH_CACHE[cache_key] = fetched
-                        extra = fetched
-                    else:
-                        extra = extra or {}
+                extra = ENRICH_CACHE.get(best["fid"], {})
+                if not extra:
+                    extra = fetch_details_scrape(best["fid"]) or {}
+                    ENRICH_CACHE[best["fid"]] = extra
 
                 ident = (extra.get("callsign") or best.get("fn") or extra.get("registration") or "UNKNOWN").strip()
                 delay_min = fetch_delay_minutes(best["fid"])
@@ -779,11 +698,18 @@ def main():
 
                 ac_name = extra.get("type_text") or ""
                 if not ac_name:
-                    ac_code = (extra.get("type") or "").upper()
+                    # Use type from details scrape first, fall back to type from feed
+                    ac_code = (extra.get("type") or best.get("type") or "").upper()
                     if ac_code in AC_FULLNAME_MAP:
                         ac_name = AC_FULLNAME_MAP[ac_code]
                 line2 = ac_name or ""
-                line3 = airport_name_only(extra.get("dep_code"), extra.get("dep_name"), extra.get("dep_city"))
+
+                # Use dep info from details scrape first, fall back to origin from feed
+                line3 = airport_name_only(
+                    extra.get("dep_code") or best.get("dep_code"),
+                    extra.get("dep_name"),
+                    extra.get("dep_city")
+                )
 
                 render_cycle_with_margins(matrix, font_small, ident, line2, line3,
                                           POLL_INTERVAL_SEC, SIDE_MARGIN_PX,
