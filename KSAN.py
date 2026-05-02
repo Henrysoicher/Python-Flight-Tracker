@@ -77,12 +77,12 @@ SIDE_MARGIN_PX = 2
 MLB_LINE1_Y = 13
 MLB_LINE2_Y = 28
 
-# dot settings (used elsewhere; MLB screen doesn't draw dots)
+# dot settings
 DOT_DIAM_PX = 7
 DOT_GAP_PX  = 3
 DOT_BASELINE_NUDGE = -1
 
-# ===== WeatherAPI simple =====
+# ===== WeatherAPI =====
 WEATHER_LAT, WEATHER_LON = 32.7195, -117.1339
 WEATHERAPI_KEY = "ffe0bd3b204f429b80f00400251408"
 WEATHER_CACHE_TTL = 900
@@ -101,26 +101,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 log = logging.getLogger("KSAN")
 DEBUG = True
 
-# ===== Aircraft names =====
-AC_FULLNAME_MAP = {
-    "A318":"Airbus A318","A319":"Airbus A319","A320":"Airbus A320","A321":"Airbus A321",
-    "A20N":"Airbus A320neo","A21N":"Airbus A321neo",
-    "B712":"Boeing 717-200","B738":"Boeing 737-800","B739":"Boeing 737-900",
-    "B38M":"Boeing 737 MAX 8","B39M":"Boeing 737 MAX 9","B3JM":"Boeing 737 MAX 10",
-    "B752":"Boeing 757-200","B763":"Boeing 767-300","B772":"Boeing 777-200","B77W":"Boeing 777-300ER",
-    "B788":"Boeing 787-8","B789":"Boeing 787-9",
-    "CRJ9":"CRJ900","E75S":"Embraer 175","E175":"Embraer 175","E170":"Embraer 170",
-}
-
 # ===== Colors =====
 def _col(r,g,b): return graphics.Color(r,g,b)
 WHITE=_col(255,255,255); GREEN=_col(0,255,0); YELLOW=_col(255,255,0); RED=_col(255,0,0); CYAN=_col(0,255,255); BLUE=_col(0,128,255)
 
-# Padres accent colors for the top (Padres) team name
-PADRES_BROWN = graphics.Color(179, 92, 14)    # S (burnt orange-ish for readability)
-PADRES_YELLOW = graphics.Color(254, 195, 37)   # D (unchanged, looks good)
+# Padres accent colors
+PADRES_BROWN  = graphics.Color(179, 92, 14)
+PADRES_YELLOW = graphics.Color(254, 195, 37)
 
-# Score center offset (pixels) to push scores slightly to the right
+# Score center offset
 SCORE_CENTER_OFFSET_PX = 4
 
 # ===== Geo helpers =====
@@ -145,7 +134,7 @@ def point_to_segment_dist_m(lat, lon, a_lat, a_lon, b_lat, b_lon):
     return math.hypot(px-cx,py-cy), t
 
 def altitude_ok(alt): return (ALT_FT_MIN <= alt <= ALT_FT_MAX) if alt is not None else not REQUIRE_ALT
-def within_corridor(lat,lon):
+def within_corridor(lat, lon):
     d,t = point_to_segment_dist_m(lat,lon,P1_LAT,P1_LON,P2_LAT,P2_LON)
     return (0<=t<=1) and (d <= CORRIDOR_HALF_MILES*1609.344)
 
@@ -175,10 +164,10 @@ def _hex_to_color(s: Optional[str], default: graphics.Color) -> graphics.Color:
 
 # ===== Parsers =====
 def _pick_airport_fields(d):
-    if not isinstance(d, dict): return (None,None,None)
+    if not isinstance(d, dict): return (None, None, None)
     code = d.get("iata") or d.get("code") or d.get("icao")
     name = d.get("name")
-    city = (d.get("position") or {}).get("region",{}).get("city")
+    city = (d.get("position") or {}).get("region", {}).get("city")
     return (str(code).upper() if code else None, name, city)
 
 # ===== FR24 fetchers =====
@@ -221,14 +210,11 @@ def fetch_live_scrape(north, south, west, east) -> List[dict]:
             for fid, info in js.items():
                 if fid in ("full_count", "version"): continue
                 try:
-                    lat     = float(info[1])
-                    lon     = float(info[2])
-                    alt_ft  = float(info[4]) if info[4] not in (None, "", "0", 0) else None
-                    # Callsign at [16], fall back to flight number at [13]
+                    lat      = float(info[1])
+                    lon      = float(info[2])
+                    alt_ft   = float(info[4]) if info[4] not in (None, "", "0", 0) else None
                     callsign = str(info[16] or info[13] or "").strip()
-                    # Aircraft type now at [8] in the feed directly
-                    ac_type  = str(info[8] or "").strip().upper()
-                    # Origin airport IATA now at [11] in the feed directly
+                    ac_type  = str(info[8]  or "").strip().upper()
                     origin   = str(info[11] or "").strip().upper()
                     out.append({
                         "lat": lat, "lon": lon, "alt_ft": alt_ft,
@@ -263,12 +249,14 @@ def fetch_details_scrape(fid: str) -> dict:
         dep = (js.get("airport") or {}).get("origin", {}) or {}
         dep_code, dep_name, dep_city = _pick_airport_fields(dep)
         return {
-            "callsign": (str(callsign).strip() if callsign else None),
+            "callsign":      (str(callsign).strip() if callsign else None),
             "flight_number": (str(flight_number_default).strip() if flight_number_default else None),
-            "registration": (str(reg).strip().upper() if reg else None),
-            "type": (str(ac_code).strip().upper() if ac_code else None),
-            "type_text": ac_text,
-            "dep_code": dep_code, "dep_name": dep_name, "dep_city": dep_city,
+            "registration":  (str(reg).strip().upper() if reg else None),
+            "type":          (str(ac_code).strip().upper() if ac_code else None),
+            "type_text":     ac_text,
+            "dep_code":      dep_code,
+            "dep_name":      dep_name,
+            "dep_city":      dep_city,
         }
     except Exception as e:
         log.warning(f"Detail scrape error {fid}: {e}")
@@ -285,9 +273,9 @@ def fetch_delay_minutes(fid: str) -> Optional[int]:
         r.raise_for_status()
         js = r.json()
         tblock = js.get("time") or {}
-        sched = (tblock.get("scheduled") or {})
-        esti  = (tblock.get("estimated") or {})
-        real  = (tblock.get("real") or {})
+        sched  = (tblock.get("scheduled") or {})
+        esti   = (tblock.get("estimated") or {})
+        real   = (tblock.get("real") or {})
         a_sched = sched.get("arrival"); a_best = real.get("arrival") or esti.get("arrival")
         if a_sched and a_best:
             return int(round((int(a_best) - int(a_sched)) / 60.0))
@@ -299,19 +287,19 @@ def fetch_delay_minutes(fid: str) -> Optional[int]:
         log.info(f"Delay check failed {fid}: {e}")
         return None
 
-# ===== Colors & dots helpers (used outside MLB) =====
+# ===== Color helpers =====
 def map_delay_to_color(d):
     if d is None: return GREEN
-    if d <= -5: return CYAN
+    if d <= -5:   return CYAN
     if -4 <= d <= 5: return GREEN
-    if d <= 20: return YELLOW
+    if d <= 20:   return YELLOW
     return RED
 
 def temp_to_color(t):
-    if t is None: return WHITE
-    if t <= 60: return BLUE
+    if t is None:    return WHITE
+    if t <= 60:      return BLUE
     if 65 <= t <= 75: return GREEN
-    if t <= 80: return YELLOW
+    if t <= 80:      return YELLOW
     return RED
 
 def wind_dir_to_arrow(deg):
@@ -328,7 +316,7 @@ def draw_status_dot(canvas, right_edge_x, baseline_y, color):
         span = int((r*r - dy*dy) ** 0.5)
         graphics.DrawLine(canvas, cx - span, cy + dy, cx + span, cy + dy, color)
 
-# ===== Weather simple =====
+# ===== Weather =====
 def fetch_weather_simple():
     now = time.time()
     if now - _weather_simple_cache["ts"] < WEATHER_CACHE_TTL and _weather_simple_cache["temp_text"]:
@@ -339,7 +327,7 @@ def fetch_weather_simple():
             params={"key": WEATHERAPI_KEY, "q": f"{WEATHER_LAT},{WEATHER_LON}", "aqi": "no"},
             timeout=6
         ).json()
-        cur = js.get("current", {}) or {}
+        cur  = js.get("current", {}) or {}
         temp = cur.get("temp_f")
         wind = cur.get("wind_mph")
         wdeg = cur.get("wind_degree")
@@ -351,28 +339,22 @@ def fetch_weather_simple():
     except Exception:
         return "—", WHITE, ""
 
-# ===== Padres live only when tied or winning =====
+# ===== Padres =====
 def fetch_padres_score_lines():
-    """
-    Returns lines only when a Padres game is live and tied or they are winning.
-    Output is have_game, top_line, bottom_line, corner_text, top_color, bottom_color
-    Padres is always on the top line. Lines look like 'SD 3'.
-    """
     now = time.time()
     if now - _padres_cache["ts"] < PADRES_CACHE_TTL:
         return (_padres_cache["have"], _padres_cache["top"], _padres_cache["bottom"],
                 _padres_cache["corner"], _padres_cache["top_color"], _padres_cache["bottom_color"])
 
     def is_live(status_block):
-        if not status_block:
-            return False
+        if not status_block: return False
         t = (status_block.get("type") or {})
         state = str(t.get("state") or "").lower()
         return state in ("in", "inprogress", "live")
 
     def team_is_padres(team_obj):
-        name = (team_obj.get("displayName") or team_obj.get("name") or "").lower()
-        abbr = (team_obj.get("abbreviation") or "").upper()
+        name  = (team_obj.get("displayName") or team_obj.get("name") or "").lower()
+        abbr  = (team_obj.get("abbreviation") or "").upper()
         short = (team_obj.get("shortDisplayName") or "").lower()
         return ("padres" in name) or ("padres" in short) or (abbr == "SD")
 
@@ -380,71 +362,55 @@ def fetch_padres_score_lines():
         return (team_obj.get("abbreviation") or team_obj.get("shortDisplayName") or team_obj.get("displayName") or "").upper()
 
     def team_color(team_obj):
-        primary = team_obj.get("color")
-        return _hex_to_color(primary, WHITE)
+        return _hex_to_color(team_obj.get("color"), WHITE)
 
     try:
         dates_to_try = [
             time.strftime("%Y%m%d", time.localtime()),
             time.strftime("%Y%m%d", time.localtime(time.time() - 86400)),
         ]
-
         for datestr in dates_to_try:
             r = requests.get(
                 "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard",
-                params={"dates": datestr},
-                timeout=6
+                params={"dates": datestr}, timeout=6
             )
             r.raise_for_status()
-            data = r.json()
+            data   = r.json()
             events = data.get("events") or []
 
             for ev in events:
-                ev_status = ev.get("status")
-                comps = (ev.get("competitions") or [{}])
-                comp = comps[0]
+                ev_status   = ev.get("status")
+                comp        = (ev.get("competitions") or [{}])[0]
                 comp_status = comp.get("status")
-
-                if not (is_live(ev_status) or is_live(comp_status)):
-                    continue
+                if not (is_live(ev_status) or is_live(comp_status)): continue
 
                 teams = comp.get("competitors") or []
-                if len(teams) != 2:
-                    continue
+                if len(teams) != 2: continue
 
                 tA = teams[0].get("team") or {}
                 tB = teams[1].get("team") or {}
-
-                if not (team_is_padres(tA) or team_is_padres(tB)):
-                    continue
+                if not (team_is_padres(tA) or team_is_padres(tB)): continue
 
                 sA = int(teams[0].get("score") or 0)
                 sB = int(teams[1].get("score") or 0)
 
-                aA = team_abbr(tA)
-                aB = team_abbr(tB)
+                padres_is_A   = team_is_padres(tA)
+                padres_score  = sA if padres_is_A else sB
+                opp_score     = sB if padres_is_A else sA
+                padres_abbr   = team_abbr(tA if padres_is_A else tB)
+                opp_abbr      = team_abbr(tB if padres_is_A else tA)
+                padres_color  = team_color(tA if padres_is_A else tB)
+                opp_color     = team_color(tB if padres_is_A else tA)
 
-                cA = team_color(tA)
-                cB = team_color(tB)
+                if padres_score < opp_score: continue
 
-                padres_is_A = team_is_padres(tA)
-                padres_score = sA if padres_is_A else sB
-                opp_score = sB if padres_is_A else sA
-                padres_abbr = aA if padres_is_A else aB
-                opp_abbr = aB if padres_is_A else aA
-                padres_color = cA if padres_is_A else cB
-                opp_color = cB if padres_is_A else cA
-
-                if padres_score < opp_score:
-                    continue
-
-                t = (ev_status or comp_status or {}).get("type") or {}
+                t      = (ev_status or comp_status or {}).get("type") or {}
                 detail = (t.get("detail") or "").lower()
-                half = "T" if "top" in detail else ("B" if "bot" in detail or "bottom" in detail else "")
-                num = "".join(ch for ch in detail if ch.isdigit()) or ""
+                half   = "T" if "top" in detail else ("B" if "bot" in detail or "bottom" in detail else "")
+                num    = "".join(ch for ch in detail if ch.isdigit()) or ""
                 corner = f"{half}{num}" or "Live"
 
-                top_line = f"{padres_abbr} {padres_score}"[:32]
+                top_line    = f"{padres_abbr} {padres_score}"[:32]
                 bottom_line = f"{opp_abbr} {opp_score}"[:32]
 
                 _padres_cache.update({
@@ -464,7 +430,7 @@ def fetch_padres_score_lines():
                               "top_color": WHITE, "bottom_color": WHITE})
         return False, "", "", "", WHITE, WHITE
 
-# ===== Scrolling renderer with true margins and dots =====
+# ===== Scrolling renderer =====
 def render_cycle_with_margins(matrix: RGBMatrix, font,
                               l1: str, l2: str, l3: str,
                               secs: float, margin: int,
@@ -473,11 +439,11 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
                               left_align: bool = False,
                               corner_right_text: Optional[str] = None):
     end_time = time.time() + secs
-    hold_ms = 1600
-    step_ms = 80
-    step_px = 1
+    hold_ms  = 1600
+    step_ms  = 80
+    step_px  = 1
 
-    c = matrix.CreateFrameCanvas()
+    c          = matrix.CreateFrameCanvas()
     viewport_w = matrix.width - 2 * margin
 
     def width(t: str) -> int:
@@ -497,8 +463,8 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
         c.Clear()
 
         text1 = l1 or "NO TRAFFIC"
-        w1_ = width(text1)
-        x1 = (margin if left_align else clamp_center_x(matrix.width, w1_, margin))
+        w1_   = width(text1)
+        x1    = (margin if left_align else clamp_center_x(matrix.width, w1_, margin))
         graphics.DrawText(c, font, x1, LINE1_Y, WHITE, text1)
 
         if (dot1 is not None) and (not left_align):
@@ -517,16 +483,14 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
                     right2 = min(matrix.width - margin - 1, x2 + w2 + DOT_GAP_PX)
                     draw_status_dot(c, right2, LINE2_Y, dot2)
             else:
-                x2 = margin - off2 if left_align else margin - off2
-                graphics.DrawText(c, font, x2, LINE2_Y, WHITE, l2)
+                graphics.DrawText(c, font, margin - off2, LINE2_Y, WHITE, l2)
 
         if l3:
             if l3_fits:
                 x3 = (margin if left_align else clamp_center_x(matrix.width, w3, margin))
                 graphics.DrawText(c, font, x3, LINE3_Y, WHITE, l3)
             else:
-                x3 = margin - off3 if left_align else margin - off3
-                graphics.DrawText(c, font, x3, LINE3_Y, WHITE, l3)
+                graphics.DrawText(c, font, margin - off3, LINE3_Y, WHITE, l3)
 
         matrix.SwapOnVSync(c)
 
@@ -542,9 +506,7 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
 
         off2 = 0
         while off2 < l2_span and time.time() < end_time:
-            draw(off2, 0)
-            time.sleep(step_ms/1000.0)
-            off2 += step_px
+            draw(off2, 0); time.sleep(step_ms/1000.0); off2 += step_px
 
         draw(l2_span, 0)
         time.sleep(min(hold_ms/1000.0, max(0.0, end_time - time.time())))
@@ -559,9 +521,7 @@ def render_cycle_with_margins(matrix: RGBMatrix, font,
 
         off3 = 0
         while off3 < l3_span and time.time() < end_time:
-            draw(0, off3)
-            time.sleep(step_ms/1000.0)
-            off3 += step_px
+            draw(0, off3); time.sleep(step_ms/1000.0); off3 += step_px
 
         draw(0, l3_span)
         time.sleep(min(hold_ms/1000.0, max(0.0, end_time - time.time())))
@@ -593,9 +553,9 @@ def render_mlb_view(matrix: RGBMatrix,
         if padres_accent:
             cur_x = x
             for ch in (text or ""):
-                up = ch.upper()
+                up    = ch.upper()
                 color = PADRES_BROWN if up == "S" else PADRES_YELLOW if up == "D" else WHITE
-                w = graphics.DrawText(c, font_big, cur_x, y, color, ch)
+                w     = graphics.DrawText(c, font_big, cur_x, y, color, ch)
                 cur_x += w
         else:
             graphics.DrawText(c, font_big, x, y, WHITE, text or "")
@@ -607,7 +567,6 @@ def render_mlb_view(matrix: RGBMatrix,
 
     while time.time() < end_time:
         c.Clear()
-
         t_team, t_score = split_team_score(top_text or "")
         b_team, b_score = split_team_score(bottom_text or "")
 
@@ -625,7 +584,7 @@ def render_mlb_view(matrix: RGBMatrix,
         matrix.SwapOnVSync(c)
         time.sleep(0.05)
 
-# ===== Matrix setup and font =====
+# ===== Matrix setup =====
 def load_small_font():
     for p in FONT_SMALL_CANDIDATES:
         try:
@@ -649,13 +608,14 @@ def load_medium_font():
 
 def setup_matrix():
     o = RGBMatrixOptions()
-    o.rows, o.cols = MATRIX_ROWS, MATRIX_COLS
-    o.chain_length, o.parallel = 1, 1
+    o.rows, o.cols    = MATRIX_ROWS, MATRIX_COLS
+    o.chain_length    = 1
+    o.parallel        = 1
     o.hardware_mapping = HARDWARE_MAPPING
-    o.pwm_bits = PWM_BITS
+    o.pwm_bits        = PWM_BITS
     o.pwm_lsb_nanoseconds = PWM_LSB_NS
-    o.gpio_slowdown = GPIO_SLOWDOWN
-    o.brightness = BRIGHTNESS
+    o.gpio_slowdown   = GPIO_SLOWDOWN
+    o.brightness      = BRIGHTNESS
     if hasattr(o, "limit_refresh_rate_hz"):
         o.limit_refresh_rate_hz = LIMIT_REFRESH_HZ
     return RGBMatrix(options=o)
@@ -674,9 +634,9 @@ def pick_best(items):
 # ===== Main =====
 def main():
     font_small = load_small_font()
-    font_mlb = load_medium_font()
-    matrix = setup_matrix()
-    n,s,w,e = corridor_bbox((P1_LAT,P1_LON),(P2_LAT,P2_LON),CORRIDOR_HALF_MILES)
+    font_mlb   = load_medium_font()
+    matrix     = setup_matrix()
+    n,s,w,e    = corridor_bbox((P1_LAT,P1_LON),(P2_LAT,P2_LON),CORRIDOR_HALF_MILES)
     log.info(f"BBox {n:.6f},{s:.6f},{w:.6f},{e:.6f}")
 
     ENRICH_CACHE: Dict[str, dict] = {}
@@ -684,7 +644,7 @@ def main():
     while True:
         try:
             items = fetch_live_scrape(n, s, w, e)
-            best = pick_best(items)
+            best  = pick_best(items)
 
             if best:
                 extra = ENRICH_CACHE.get(best["fid"], {})
@@ -692,17 +652,15 @@ def main():
                     extra = fetch_details_scrape(best["fid"]) or {}
                     ENRICH_CACHE[best["fid"]] = extra
 
-                ident = (extra.get("callsign") or best.get("fn") or extra.get("registration") or "UNKNOWN").strip()
-                delay_min = fetch_delay_minutes(best["fid"])
+                # Debug line — remove once confirmed working
+                log.info(f"DEBUG type_text='{extra.get('type_text')}' type='{extra.get('type')}' feed_type='{best.get('type')}' dep='{extra.get('dep_code') or best.get('dep_code')}'")
+
+                ident      = (extra.get("callsign") or best.get("fn") or extra.get("registration") or "UNKNOWN").strip()
+                delay_min  = fetch_delay_minutes(best["fid"])
                 status_dot = map_delay_to_color(delay_min)
 
-                ac_name = extra.get("type_text") or ""
-                if not ac_name:
-                    # Use type from details scrape first, fall back to type from feed
-                    ac_code = (extra.get("type") or best.get("type") or "").upper()
-                    if ac_code in AC_FULLNAME_MAP:
-                        ac_name = AC_FULLNAME_MAP[ac_code]
-                line2 = ac_name or ""
+                # Trust FR24's own full name first, then fall back to feed type code
+                line2 = extra.get("type_text") or best.get("type") or ""
 
                 # Use dep info from details scrape first, fall back to origin from feed
                 line3 = airport_name_only(
