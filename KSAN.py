@@ -23,8 +23,8 @@ HTTP_TIMEOUT_SEC  = 8
 
 # ===== FR24 scraping =====
 FEED_HOSTS = [
-    "https://data-cloud.flightradar24.com",
     "https://data-live.flightradar24.com",
+    "https://data-cloud.flightradar24.com",
 ]
 FEED_PATH = "/zones/fcgi/feed.js"
 FEED_TAIL = (
@@ -100,6 +100,7 @@ PADRES_CACHE_TTL = 30
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("KSAN")
 DEBUG = True
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 # ===== Aircraft names =====
 AC_FULLNAME_MAP = {
@@ -215,57 +216,149 @@ def fetch_live_scrape(north, south, west, east) -> List[dict]:
 
 def fetch_details_scrape(fid: str) -> dict:
     url = f"{DETAILS_HEAD}{fid}&_ts={int(time.time())}"
+
     try:
         r = _SESS.get(url, timeout=HTTP_TIMEOUT_SEC)
+
         if r.status_code == 403:
-            tmp = dict(BROWSER_HEADERS); tmp.pop("Origin", None); tmp.pop("Referer", None)
+            tmp = dict(BROWSER_HEADERS)
+            tmp.pop("Origin", None)
+            tmp.pop("Referer", None)
+
             with requests.Session() as s2:
-                s2.headers.update(tmp); r = s2.get(url, timeout=HTTP_TIMEOUT_SEC)
+                s2.headers.update(tmp)
+                r = s2.get(url, timeout=HTTP_TIMEOUT_SEC)
+
         r.raise_for_status()
-        js = r.json()
+
+        try:
+            js = r.json()
+        except Exception:
+            log.warning(f"FR24 returned non-JSON for {fid}")
+            try:
+                log.warning(r.text[:1000])
+            except Exception:
+                pass
+            return {}
+
+        if DEBUG:
+            try:
+                log.info(f"FR24 details keys for {fid}: {list(js.keys())}")
+            except Exception:
+                pass
+
         ident = js.get("identification", {}) or {}
-        callsign = ident.get("callsign")
-        flight_number_default = ((ident.get("number") or {}).get("default") if isinstance(ident.get("number"), dict) else None)
-        ac = (js.get("aircraft") or {}).get("model", {}) or {}
-        ac_code, ac_text = ac.get("code"), ac.get("text")
-        reg = (js.get("aircraft") or {}).get("registration")
-        dep = (js.get("airport") or {}).get("origin", {}) or {}
+
+        callsign = (
+            ident.get("callsign")
+            or ident.get("id")
+            or ident.get("hex")
+        )
+
+        number_block = ident.get("number") or {}
+
+        flight_number_default = (
+            number_block.get("default")
+            or number_block.get("short")
+            or ident.get("flight")
+            or ident.get("callsign")
+        )
+
+        aircraft = js.get("aircraft", {}) or {}
+        model = aircraft.get("model", {}) or {}
+
+        ac_code = (
+            model.get("code")
+            or aircraft.get("icao")
+            or aircraft.get("type")
+        )
+
+        ac_text = (
+            model.get("text")
+            or aircraft.get("name")
+            or aircraft.get("type")
+        )
+
+        reg = aircraft.get("registration")
+
+        airport = js.get("airport", {}) or {}
+
+        dep = (
+            airport.get("origin")
+            or airport.get("departure")
+            or airport.get("from")
+            or {}
+        )
+
         dep_code, dep_name, dep_city = _pick_airport_fields(dep)
+
         return {
             "callsign": (str(callsign).strip() if callsign else None),
             "flight_number": (str(flight_number_default).strip() if flight_number_default else None),
             "registration": (str(reg).strip().upper() if reg else None),
             "type": (str(ac_code).strip().upper() if ac_code else None),
             "type_text": ac_text,
-            "dep_code": dep_code, "dep_name": dep_name, "dep_city": dep_city,
+            "dep_code": dep_code,
+            "dep_name": dep_name,
+            "dep_city": dep_city,
         }
+
     except Exception as e:
         log.warning(f"Detail scrape error {fid}: {e}")
+
+        try:
+            log.warning(r.text[:1000])
+        except Exception:
+            pass
+
         return {}
 
 def fetch_delay_minutes(fid: str) -> Optional[int]:
     url = f"{DETAILS_HEAD}{fid}&_ts={int(time.time())}"
+
     try:
         r = _SESS.get(url, timeout=HTTP_TIMEOUT_SEC)
+
         if r.status_code == 403:
-            tmp = dict(BROWSER_HEADERS); tmp.pop("Origin", None); tmp.pop("Referer", None)
+            tmp = dict(BROWSER_HEADERS)
+            tmp.pop("Origin", None)
+            tmp.pop("Referer", None)
+
             with requests.Session() as s2:
-                s2.headers.update(tmp); r = s2.get(url, timeout=HTTP_TIMEOUT_SEC)
+                s2.headers.update(tmp)
+                r = s2.get(url, timeout=HTTP_TIMEOUT_SEC)
+
         r.raise_for_status()
         js = r.json()
-        tblock = js.get("time") or {}
-        sched = (tblock.get("scheduled") or {})
-        esti  = (tblock.get("estimated") or {})
-        real  = (tblock.get("real") or {})
-        a_sched = sched.get("arrival"); a_best = real.get("arrival") or esti.get("arrival")
-        if a_sched and a_best:
-            return int(round((int(a_best) - int(a_sched)) / 60.0))
-        d_sched = sched.get("departure"); d_best = real.get("departure") or esti.get("departure")
-        if d_sched and d_best:
-            return int(round((int(d_best) - int(d_sched)) / 60.0))
+
+        time_block = js.get("time") or {}
+
+        sched = time_block.get("scheduled") or {}
+        esti = time_block.get("estimated") or {}
+        real = time_block.get("real") or {}
+
+        arrival_sched = sched.get("arrival")
+        arrival_best = real.get("arrival") or esti.get("arrival")
+
+        if arrival_sched and arrival_best:
+            return int(round((int(arrival_best) - int(arrival_sched)) / 60.0))
+
+        dep_sched = sched.get("departure")
+        dep_best = real.get("departure") or esti.get("departure")
+
+        if dep_sched and dep_best:
+            return int(round((int(dep_best) - int(dep_sched)) / 60.0))
+
         return None
+
     except Exception as e:
         log.info(f"Delay check failed {fid}: {e}")
+
+        try:
+            log.info(r.text[:500])
+        except Exception:
+            pass
+
         return None
 
 # ===== Colors & dots helpers (used outside MLB) =====
@@ -661,10 +754,24 @@ def main():
             best = pick_best(items)
 
             if best:
-                extra = ENRICH_CACHE.get(best["fid"], {})
-                if (not extra) or (not (best.get("fn") or "").strip()):
-                    extra = fetch_details_scrape(best["fid"]) or {}
-                    ENRICH_CACHE[best["fid"]] = extra
+                cache_key = best["fid"]
+                extra = ENRICH_CACHE.get(cache_key)
+
+                needs_refresh = (
+                    not extra
+                    or not extra.get("flight_number")
+                    or not extra.get("dep_code")
+                    or not extra.get("type")
+                )
+
+                if needs_refresh:
+                    fetched = fetch_details_scrape(cache_key)
+
+                    if fetched:
+                        ENRICH_CACHE[cache_key] = fetched
+                        extra = fetched
+                    else:
+                        extra = extra or {}
 
                 ident = (extra.get("callsign") or best.get("fn") or extra.get("registration") or "UNKNOWN").strip()
                 delay_min = fetch_delay_minutes(best["fid"])
